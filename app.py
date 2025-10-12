@@ -57,7 +57,7 @@ def flatten_cuaca_entry(entry):
 
 # Sidebar controls
 st.sidebar.title("Kontrol Infografis")
-adm1 = st.sidebar.text_input("Kode ADM1 (provinsi)", value="14")
+adm1 = st.sidebar.text_input("Kode ADM1 (provinsi)", value="35")
 refresh = st.sidebar.button("Ambil ulang data")
 
 st.sidebar.markdown("---")
@@ -276,3 +276,4 @@ st.markdown("""
 """)
 
 st.caption("Aplikasi demo infografis prakiraan cuaca — data BMKG")
+
