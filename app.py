@@ -1,10 +1,13 @@
 import streamlit as st
 import requests
 import pandas as pd
-import plotly.express as px
 from datetime import datetime
+from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="Infografis Prakiraan Cuaca + QAM Simulasi", layout="wide")
+# (plotly sebaiknya tetap kamu import untuk grafik forecast)
+import plotly.express as px
+
+st.set_page_config(page_title="Infografis Cuaca + QAM Simulasi + TAFOR", layout="wide")
 
 API_BASE = "https://cuaca.bmkg.go.id/api/df/v1/forecast/adm"
 
@@ -21,7 +24,6 @@ def flatten_cuaca_entry(entry):
     for group in entry.get("cuaca", []):
         for obs in group:
             r = obs.copy()
-            # metadata lokasi
             r.update({
                 "adm1": lokasi.get("adm1"),
                 "adm2": lokasi.get("adm2"),
@@ -32,7 +34,6 @@ def flatten_cuaca_entry(entry):
                 "timezone": lokasi.get("timezone", "+0700"),
                 "type": lokasi.get("type"),
             })
-            # parse datetime
             try:
                 r["utc_datetime_dt"] = pd.to_datetime(r.get("utc_datetime"))
             except:
@@ -45,7 +46,6 @@ def flatten_cuaca_entry(entry):
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
-    # numeric
     numeric_cols = ["t", "tcc", "tp", "wd_deg", "ws", "hu", "vs"]
     for c in numeric_cols:
         if c in df.columns:
@@ -53,21 +53,13 @@ def flatten_cuaca_entry(entry):
     return df
 
 def simulate_qam_from_forecast(df: pd.DataFrame):
-    """
-    Simulasikan QAM dari data prakiraan (ambil yang paling mendekati waktu sekarang).
-    Kembalikan dict / row dengan kolom-kolom QAM.
-    """
     if df.empty:
         return None
-    # cari baris paling dekat ke waktu sekarang (local)
-    # asumsi df["local_datetime_dt"] ada
     now = pd.Timestamp.now(tz=None)
-    # hitung selisih absolut
-    df = df.copy()
-    df["delta"] = df["local_datetime_dt"].apply(lambda x: abs((x - now).total_seconds()) if pd.notna(x) else float("inf"))
-    df = df.sort_values("delta")
-    rec = df.iloc[0]
-    # buat dict QAM
+    df2 = df.copy()
+    df2["delta"] = df2["local_datetime_dt"].apply(lambda x: abs((x - now).total_seconds()) if pd.notna(x) else float("inf"))
+    df2 = df2.sort_values("delta")
+    rec = df2.iloc[0]
     q = {
         "Waktu (lokal)": rec.get("local_datetime_dt", ""),
         "Arah angin (deg)": rec.get("wd_deg", "—"),
@@ -76,30 +68,54 @@ def simulate_qam_from_forecast(df: pd.DataFrame):
         "Curah hujan (mm)": rec.get("tp", "—"),
         "Suhu (°C)": rec.get("t", "—"),
         "Kelembaban (%)": rec.get("hu", "—"),
-        "Visibilitas (asi)": rec.get("vs", "—"),  # vs = visibility in some unit
-        # tekanan mungkin tidak tersedia dalam forecast API
+        "Visibilitas": rec.get("vs", "—"),
         "Tekanan": rec.get("pressure", "—") if "pressure" in rec else "—"
     }
     return q
 
+def fetch_tafor(icao: str):
+    """
+    Scrape halaman TAF BMKG untuk stasiun ICAO, dan ambil teks TAF.
+    Jika gagal atau tidak ada, return None.
+    """
+    # situs TAF BMKG
+    url = f"https://web-aviation.bmkg.go.id/web/taf.php?icao={icao}"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as e:
+        return None
+    
+    soup = BeautifulSoup(html, "html.parser")
+    # Coba cari elemen <pre> atau <textarea> atau div khusus
+    # Contoh: biasanya TAF ditampilkan di halaman “Informasi TAF”
+    pre = soup.find("pre")
+    if pre:
+        return pre.get_text().strip()
+    # Jika tidak ditemukan, cari elemen teks panjang lainnya
+    # Sebagai fallback, ambil seluruh isi body
+    body = soup.get_text(separator="\n")
+    return body.strip()
+
 # Sidebar
-st.sidebar.title("Kontrol Infografis + QAM Simulasi")
+st.sidebar.title("Kontrol Aplikasi Cuaca / QAM / TAFOR")
 adm1 = st.sidebar.text_input("Kode ADM1 (provinsi)", value="32")
 refresh = st.sidebar.button("Ambil ulang data")
 
 show_map = st.sidebar.checkbox("Tampilkan peta lokasi", value=True)
 show_table = st.sidebar.checkbox("Tampilkan tabel data", value=False)
 show_qam = st.sidebar.checkbox("Tampilkan QAM Simulasi", value=True)
+show_tafor = st.sidebar.checkbox("Tampilkan TAFOR / TAF", value=True)
+icao = st.sidebar.text_input("Kode ICAO (stasiun bandara)", value="WIII")
 
 st.sidebar.markdown("---")
-start_max = None  # nanti diisi
 
-# Main UI
-st.title("Infografis Prakiraan Cuaca & QAM Simulasi (BMKG)")
-st.markdown("Sumber: `https://cuaca.bmkg.go.id/api/df/v1/forecast/adm?adm1=<kode>`")
+# Main
+st.title("Infografis Cuaca + QAM Simulasi + TAFOR (BMKG)")
+st.markdown("Sumber: BMKG (Forecast API, halaman TAF)")
 
-# ambil data
-with st.spinner("Mengambil data..."):
+with st.spinner("Mengambil data prakiraan ..."):
     try:
         raw = fetch_forecast(adm1)
     except Exception as e:
@@ -112,7 +128,6 @@ if not entries:
     st.warning("Tidak ada data untuk ADM1 ini.")
     st.stop()
 
-# mapping lokasi
 mapping = {}
 for e in entries:
     lok = e.get("lokasi", {})
@@ -120,7 +135,7 @@ for e in entries:
     key = lok.get("adm2") or lok.get("kotkab") or str(len(mapping)+1)
     mapping[label] = {"key": key, "entry": e}
 
-col1, col2 = st.columns([2, 1])
+col1, col2 = st.columns([2,1])
 with col1:
     prov_name = lokasi_meta.get("provinsi", "—")
     st.subheader(f"Provinsi: {prov_name}")
@@ -154,7 +169,7 @@ start_dt = st.sidebar.slider(
 mask = (df["local_datetime_dt"] >= pd.to_datetime(start_dt[0])) & (df["local_datetime_dt"] <= pd.to_datetime(start_dt[1]))
 df_sel = df.loc[mask].copy()
 
-# Tampilkan QAM Simulasi jika dipilih
+# Tampilkan QAM Simulasi
 if show_qam:
     st.markdown("---")
     st.header("QAM Simulasi")
@@ -162,14 +177,22 @@ if show_qam:
     if q is None:
         st.info("Tidak dapat membuat QAM simulasi (data kosong).")
     else:
-        # Tampilkan sebagai tabel satu baris
         df_q = pd.DataFrame([q])
-        # format kolom waktu sebagai string
         if isinstance(q["Waktu (lokal)"], pd.Timestamp):
             df_q["Waktu (lokal)"] = df_q["Waktu (lokal)"].dt.strftime("%d %b %Y %H:%M")
         st.table(df_q)
 
-# Tampilkan metrik top
+# Tampilkan TAFOR / TAF jika diminta
+if show_tafor:
+    st.markdown("---")
+    st.header("TAFOR / TAF (Aerodrome Forecast)")
+    taf_text = fetch_tafor(icao.strip().upper())
+    if taf_text:
+        st.text(taf_text)
+    else:
+        st.info("TAFOR / TAF tidak tersedia untuk ICAO tersebut atau gagal diambil.")
+
+# Tampilkan metrik utama dari baris pertama df_sel (atau fallback)
 r1c1, r1c2, r1c3, r1c4 = st.columns(4)
 now_row = df_sel.iloc[0] if not df_sel.empty else df.iloc[0]
 with r1c1:
@@ -181,16 +204,15 @@ with r1c3:
 with r1c4:
     st.metric("Awan & Curah", f"Cloud cover: {now_row.get('tcc', '—')}%, TP: {now_row.get('tp', '—')} mm")
 
-# Grafik tren
 st.markdown("---")
-st.header("Grafik Tren — Parameter Utama")
+st.header("Grafik Tren Parameter Utama")
 if df_sel.empty:
     st.warning("Tidak ada data di rentang waktu yang dipilih.")
 else:
     fig_t = px.line(df_sel, x="local_datetime_dt", y="t", markers=True, title="Suhu (°C)")
     fig_t.update_layout(yaxis_title="Temperature (°C)", xaxis_title="Waktu (Lokal)")
     fig_hu = px.line(df_sel, x="local_datetime_dt", y="hu", markers=True, title="Kelembaban (%)")
-    fig_hu.update_layout(yaxis_title="Rel Humidity (%)", xaxis_title="Waktu (Lokal)")
+    fig_hu.update_layout(yaxis_title="RH (%)", xaxis_title="Waktu (Lokal)")
     fig_ws = px.line(df_sel, x="local_datetime_dt", y="ws", markers=True, title="Kecepatan Angin (m/s)")
     fig_ws.update_layout(yaxis_title="Wind Speed (m/s)", xaxis_title="Waktu (Lokal)")
     fig_tp = px.bar(df_sel, x="local_datetime_dt", y="tp", title="Curah Hujan (mm)")
@@ -204,9 +226,8 @@ else:
         st.plotly_chart(fig_ws, use_container_width=True)
         st.plotly_chart(fig_tp, use_container_width=True)
 
-# Timeline cuaca ringkas
 st.markdown("---")
-st.header("Tabel Cuaca (Ringkas)")
+st.header("Tabel Cuaca Ringkas")
 timeline = df_sel.sort_values(by="local_datetime_dt")[
     ["local_datetime_dt", "weather_desc", "t", "hu", "ws", "tp", "image"]
 ].copy()
@@ -250,40 +271,38 @@ for _, r in timeline_show.iterrows():
 table_html += "</tbody></table>"
 st.markdown(table_html, unsafe_allow_html=True)
 
-# Map
 if show_map:
     st.markdown("---")
     st.header("Peta Lokasi")
     try:
         lat = float(selected_entry.get("lokasi", {}).get("lat", 0))
         lon = float(selected_entry.get("lokasi", {}).get("lon", 0))
-        map_df = pd.DataFrame({"lat": [lat], "lon": [lon]})
+        map_df = pd.DataFrame({"lat":[lat], "lon":[lon]})
         st.map(map_df)
     except Exception as e:
         st.warning(f"Peta tidak tersedia: {e}")
 
-# Raw table
 if show_table:
     st.markdown("---")
-    st.header("Tabel Data (Mentah)")
+    st.header("Tabel Data Mentah")
     st.dataframe(df_sel)
 
-# Export
+# Ekspor data forecast (tidak untuk TAFOR karena teks)
 st.markdown("---")
-st.header("Ekspor Data")
+st.header("Ekspor Data Prakiraan")
 csv = df_sel.to_csv(index=False)
 json_text = df_sel.to_json(orient="records", force_ascii=False, date_format="iso")
-col_dl1, col_dl2 = st.columns(2)
-with col_dl1:
+c1, c2 = st.columns(2)
+with c1:
     st.download_button("Unduh CSV", data=csv, file_name=f"forecast_adm1_{adm1}_{loc_choice}.csv", mime="text/csv")
-with col_dl2:
+with c2:
     st.download_button("Unduh JSON", data=json_text, file_name=f"forecast_adm1_{adm1}_{loc_choice}.json", mime="application/json")
 
 st.markdown("""
----
 **Catatan:**
-- QAM Simulasi ini **bukan data observasi** — hanya interpretasi dari data prakiraan BMKG.
-- Beberapa kolom (tekanan, visibilitas, dll) mungkin tidak tersedia di API prakiraan.
-- Pilih rentang waktu yang mencakup waktu sekarang agar simulasi lebih relevan.
+- TAFOR / TAF diambil via *scraping* halaman TAF BMKG, tidak dari API JSON publik. Keberhasilan tergantung struktur halaman BMKG dan stasiun ICAO.
+- QAM Simulasi hanya interpretasi dari data prakiraan (bukan observasi).
+- Pastikan memasukkan kode ICAO yang valid agar TAFOR bisa ditampilkan.
 """)
-st.caption("Aplikasi dengan QAM simulasi berdasarkan data prakiraan cuaca — sumber: BMKG")
+st.caption("Aplikasi cuaca + QAM simulasi + TAFOR — data dari BMKG / scraping TAF")
+
