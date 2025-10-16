@@ -163,10 +163,18 @@ st.header("Grafik Tren — Parameter Utama")
 if df_sel.empty:
     st.warning("Tidak ada data di rentang waktu yang dipilih.")
 else:
+    # === Tambahan label sumbu Y ===
     fig_t = px.line(df_sel, x="local_datetime_dt", y="t", markers=True, title="Suhu (°C)")
+    fig_t.update_layout(yaxis_title="Temperature (°C)", xaxis_title="Waktu (Lokal)")
+
     fig_hu = px.line(df_sel, x="local_datetime_dt", y="hu", markers=True, title="Kelembaban (%)")
+    fig_hu.update_layout(yaxis_title="Relative Humidity (%)", xaxis_title="Waktu (Lokal)")
+
     fig_ws = px.line(df_sel, x="local_datetime_dt", y="ws", markers=True, title="Kecepatan Angin (m/s)")
+    fig_ws.update_layout(yaxis_title="Wind Speed (m/s)", xaxis_title="Waktu (Lokal)")
+
     fig_tp = px.bar(df_sel, x="local_datetime_dt", y="tp", title="Curah Hujan (mm)")
+    fig_tp.update_layout(yaxis_title="Rainfall (mm)", xaxis_title="Waktu (Lokal)")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -225,7 +233,7 @@ table.weather-table tr:hover {
 }
 </style>
 <table class='weather-table'>
-<thead><tr>""" + "".join([f"<th>{c}</th>" for c in cols_show]) + "</tr></thead><tbody>"
+<thead><tr>""" + "".join([f"<th>{c}</th>" for c in cols_show]) + "</tr></thead><tbody>"""
 
 for _, r in timeline_show.iterrows():
     table_html += "<tr>" + "".join([f"<td>{r[c]}</td>" for c in cols_show]) + "</tr>"
@@ -233,7 +241,6 @@ for _, r in timeline_show.iterrows():
 table_html += "</tbody></table>"
 
 st.markdown(table_html, unsafe_allow_html=True)
-
 
 # Map
 if show_map:
@@ -276,5 +283,3 @@ st.markdown("""
 """)
 
 st.caption("Aplikasi demo infografis prakiraan cuaca — data BMKG")
-
-
